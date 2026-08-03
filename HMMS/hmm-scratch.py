@@ -9,6 +9,7 @@ from scipy.stats import multivariate_normal
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.backends.backend_pdf import PdfPages
 
 # channels are stored in (green, blue, red) order, matching build_trajectory()
 CHANNEL_COLORS = [(0.47, 0.67, 0.19), (0.07, 0.62, 1.0), (0.64, 0.08, 0.18)]
@@ -411,7 +412,6 @@ def expectation_maximization_single_trace(
     if not isConverged:
         print(f"EM algorithm did not converge within the maximum number of iterations.")
 
-    
     return u, sigma, transition_mat, pi, likelihood, transition_history
 
 
@@ -424,6 +424,7 @@ def expectation_maximization_multi_trace(
     transition_mat: np.ndarray,
     sigma: np.ndarray,
     trajectory: list | np.ndarray,
+    solve: str = "precision"
 ):
 
     # need to check that everything is matmul or elementwise
@@ -435,7 +436,7 @@ def expectation_maximization_multi_trace(
     sigma0 = sigma
     criterion = 1e-3
     isConverged = False
-    iter = 100
+    iter = 1000
     time = 0
     Nstate = u.shape[1]
     eps = np.spacing(1.0)
@@ -567,7 +568,7 @@ def expectation_maximization_multi_trace(
         if time >= 2:
             if abs(likelihood[time - 1] - likelihood[time - 2]) < criterion:
                 isConverged = True  # we have converged; just break and return
-                print(f"EM algorithm converged in {100 - iter} iterations.")
+                print(f"EM algorithm converged in {1000 - iter} iterations.")
                 return u, sigma, transition_mat, pi, likelihood, transition_history
 
         pi = PI_acc / sum(PI_acc)  # update initial state probabilities
@@ -594,41 +595,79 @@ def expectation_maximization_multi_trace(
                 sigma[:, :, i]
             )  # precision is the inverse of the covariance matrix
 
+        if solve == "precision":
         # update constrained means
-        a11 = np.zeros((Mg.shape[1], Mg.shape[1]))
-        a12 = np.zeros((Mg.shape[1], Mb.shape[1]))
-        a13 = np.zeros((Mg.shape[1], Mr.shape[1]))
+            a11 = np.zeros((Mg.shape[1], Mg.shape[1]))
+            a12 = np.zeros((Mg.shape[1], Mb.shape[1]))
+            a13 = np.zeros((Mg.shape[1], Mr.shape[1]))
 
-        a21 = np.zeros((Mb.shape[1], Mg.shape[1]))
-        a22 = np.zeros((Mb.shape[1], Mb.shape[1]))
-        a23 = np.zeros((Mb.shape[1], Mr.shape[1]))
+            a21 = np.zeros((Mb.shape[1], Mg.shape[1]))
+            a22 = np.zeros((Mb.shape[1], Mb.shape[1]))
+            a23 = np.zeros((Mb.shape[1], Mr.shape[1]))
 
-        a31 = np.zeros((Mr.shape[1], Mg.shape[1]))
-        a32 = np.zeros((Mr.shape[1], Mb.shape[1]))
-        a33 = np.zeros((Mr.shape[1], Mr.shape[1]))
+            a31 = np.zeros((Mr.shape[1], Mg.shape[1]))
+            a32 = np.zeros((Mr.shape[1], Mb.shape[1]))
+            a33 = np.zeros((Mr.shape[1], Mr.shape[1]))
 
-        for i in range(0, Nstate):
-            a11 = a11 + Mg[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
-            a12 = a12 + Mg[:, :, i].T @ precision[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
-            a13 = a13 + Mg[:, :, i].T @ precision[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
-            a21 = a21 + Mb[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
-            a22 = a22 + Mb[:, :, i].T @ precision[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
-            a23 = a23 + Mb[:, :, i].T @ precision[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
-            a31 = a31 + Mr[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
-            a32 = a32 + Mr[:, :, i].T @ precision[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
-            a33 = a33 + Mr[:, :, i].T @ precision[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
+            for i in range(0, Nstate):
+                a11 = a11 + Mg[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
+                a12 = a12 + Mg[:, :, i].T @ precision[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
+                a13 = a13 + Mg[:, :, i].T @ precision[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
+                a21 = a21 + Mb[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
+                a22 = a22 + Mb[:, :, i].T @ precision[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
+                a23 = a23 + Mb[:, :, i].T @ precision[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
+                a31 = a31 + Mr[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
+                a32 = a32 + Mr[:, :, i].T @ precision[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
+                a33 = a33 + Mr[:, :, i].T @ precision[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
 
-        c1 = np.zeros(Mg.shape[1])
-        c2 = np.zeros(Mb.shape[1])
-        c3 = np.zeros(Mr.shape[1])
+            c1 = np.zeros(Mg.shape[1])
+            c2 = np.zeros(Mb.shape[1])
+            c3 = np.zeros(Mr.shape[1])
 
-        for i in range(0, Nstate):
-            c1 = c1 + Mg[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
-            c2 = c2 + Mb[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
-            c3 = c3 + Mr[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
+            for i in range(0, Nstate):
+                c1 = c1 + Mg[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
+                c2 = c2 + Mb[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
+                c3 = c3 + Mr[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
 
-        coeff = np.block([[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]])
-        b = np.concatenate([c1, c2, c3])
+            coeff = np.block([[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]])
+            b = np.concatenate([c1, c2, c3])
+
+
+        if solve == "covariance":
+            a11 = np.zeros((Mg.shape[1], Mg.shape[1]))
+            a12 = np.zeros((Mg.shape[1], Mb.shape[1]))
+            a13 = np.zeros((Mg.shape[1], Mr.shape[1]))
+
+            a21 = np.zeros((Mb.shape[1], Mg.shape[1]))
+            a22 = np.zeros((Mb.shape[1], Mb.shape[1]))
+            a23 = np.zeros((Mb.shape[1], Mr.shape[1]))
+
+            a31 = np.zeros((Mr.shape[1], Mg.shape[1]))
+            a32 = np.zeros((Mr.shape[1], Mb.shape[1]))
+            a33 = np.zeros((Mr.shape[1], Mr.shape[1]))
+
+            for i in range(0, Nstate):
+                a11 = a11 + Mg[:, :, i].T @ sigma[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
+                a12 = a12 + Mg[:, :, i].T @ sigma[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
+                a13 = a13 + Mg[:, :, i].T @ sigma[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
+                a21 = a21 + Mb[:, :, i].T @ sigma[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
+                a22 = a22 + Mb[:, :, i].T @ sigma[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
+                a23 = a23 + Mb[:, :, i].T @ sigma[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
+                a31 = a31 + Mr[:, :, i].T @ sigma[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
+                a32 = a32 + Mr[:, :, i].T @ sigma[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
+                a33 = a33 + Mr[:, :, i].T @ sigma[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
+
+            c1 = np.zeros(Mg.shape[1])
+            c2 = np.zeros(Mb.shape[1])
+            c3 = np.zeros(Mr.shape[1])
+
+            for i in range(0, Nstate):
+                c1 = c1 + Mg[:, :, i].T @ sigma[:, :, i] @ gammaSumY[:, i]
+                c2 = c2 + Mb[:, :, i].T @ sigma[:, :, i] @ gammaSumY[:, i]
+                c3 = c3 + Mr[:, :, i].T @ sigma[:, :, i] @ gammaSumY[:, i]
+
+            coeff = np.block([[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]])
+            b = np.concatenate([c1, c2, c3])
 
         ## overdetermined matrix
         results = np.linalg.lstsq(coeff.T, b.T)[0].T
@@ -1230,6 +1269,7 @@ def _theta_to_states(stateindex, theta, Lg, Lb, Lr):
     return u
 
 
+# claude implementation of semi-pooled hierarchical bayes using naive EM
 def expectation_maximization_multi_trace_hb(
     stateindex,
     ug: np.ndarray,
@@ -1240,25 +1280,52 @@ def expectation_maximization_multi_trace_hb(
     trajectory: list,
     S_frac0: float = 0.10,
     var_floor: float = 0.05**2,
-    max_iter: int = 100,
+    max_iter: int = 1000,
     criterion: float = 1e-3,
+    apply_v_corrections: bool = True,
 ):
-    """Full hierarchical-Bayes multi-trace HMM (constrained-means version).
+    """Variational-EM hierarchical (empirical-Bayes) multi-trace HMM.
 
-    Each trace n gets its OWN level vector theta^(n) = [ug; ub; ur] in R^L,
-    drawn from a shared population theta^(n) ~ N(m, S). The per-trace M-step is
-    the constrained block solve with a ridge toward the population:
+    Each trace n has its OWN level vector theta^(n) = [ug; ub; ur] in R^L, drawn
+    from a shared population theta^(n) ~ N(m, S). Both the state paths z^(n) and
+    the levels theta^(n) are LATENT; (m, S, A, pi, Sigma) are the parameters.
+    The algorithm is coordinate ascent on the variational free energy under the
+    mean field q_n(z, theta) = q_n(z) q_n(theta), which is exact given the
+    factorisation because the model is conditionally Gaussian and linear in
+    theta. See eb-hmm-derivation.md for the full derivation.
 
-        (coeff^(n) + S^-1) theta^(n) = b^(n) + S^-1 m
+    q_n(theta) = N(theta^(n), V^(n)) comes out in closed form:
 
-    where coeff^(n), b^(n) are your existing block matrices, accumulated from
-    trace n ALONE. Shared across traces: transition matrix, pi, per-state
-    covariance (pooled MLE). Population m, S are re-estimated each iteration,
-    with S including the posterior-covariance term V^(n) = (coeff^(n)+S^-1)^-1.
+        V^(n)     = (coeff^(n) + S^-1)^-1
+        theta^(n) = V^(n) (b^(n) + S^-1 m)
+
+    Note this solve is an E-STEP -- it is the MEAN of a Gaussian posterior, and
+    only coincides with the maximiser of a penalised likelihood because a
+    Gaussian's mode equals its mean. That is why V^(n) is available at all, and
+    V^(n) is what the (m, S) update needs.
+
+    Three places require V^(n) beyond the theta solve. Dropping any of them
+    silently reverts to "theta known exactly" and biases S downward, which
+    compounds into over-shrinkage (see derivation section 5.1):
+
+      1. the emissions used by forward-backward carry a factor
+         exp(-1/2 tr(Sigma_i^-1 M_i V^(n) M_i^T));
+      2. the Sigma_i update carries an extra N_i^(n) M_i V^(n) M_i^T;
+      3. the monitored objective is the free energy
+         F = sum_n [log Ztilde^(n) - KL(q_n(theta) || N(m, S))],
+         NOT the conditional log-likelihood at a point.
+
+    Shared across traces: transition matrix, pi, per-state covariance.
+
+    apply_v_corrections=False drops all three V^(n) terms, recovering the
+    plug-in / "theta as a parameter" variant. It is provided ONLY for ablation
+    -- that variant is known to over-shrink and to drive S toward zero, so it
+    should not be used for production fits. The free energy is still reported,
+    but it is not the objective that variant ascends and need not be monotone.
 
     Returns m (population mean levels), S (population covariance), thetas
-    (per-trace level vectors, shape (N, L)), sigma, transition_mat, pi, and the
-    per-iteration log-likelihood.
+    (per-trace level vectors, shape (N, L)), sigma, transition_mat, pi, the
+    per-iteration free energy, and the transition-matrix history.
     """
     Mg, Mb, Mr = build_select_matrices(stateindex)
     Lg, Lb, Lr = Mg.shape[1], Mb.shape[1], Mr.shape[1]
@@ -1267,24 +1334,41 @@ def expectation_maximization_multi_trace_hb(
     N = len(trajectory)
     eps = np.spacing(1.0)
 
+    # Stacked selection matrix per state, (d, L), so that u_i = M_all[i] @ theta.
+    # Same content as the Mg/Mb/Mr block assembly, just in one piece -- the
+    # emission correction and the Sigma correction both need M_i as a whole.
+    M_all = [np.hstack([Mg[:, :, i], Mb[:, :, i], Mr[:, :, i]]) for i in range(Nstate)]
+
     # ---- population (hyper) parameters, in LEVEL space R^L ----
     m = np.concatenate(
         [np.asarray(ug, float), np.asarray(ub, float), np.asarray(ur, float)]
     )
-    S = np.diag(np.maximum((S_frac0 * np.abs(m)) ** 2, 1.0))  # initial spread
+    # Initial spread: a fraction of each level, floored relative to the overall
+    # level scale so the initialisation is unit-agnostic. (A hard floor of 1.0
+    # is negligible for raw intensities but enormous for [0, 1]-normalised
+    # levels, where it would make the initial prior essentially flat.)
+    scale = np.sqrt(np.mean(m**2)) if np.any(m) else 1.0
+    S = np.diag(np.maximum((S_frac0 * np.abs(m)) ** 2, (S_frac0 * scale) ** 2))
 
     # per-trace level vectors; all start at the population mean
     thetas = np.tile(m, (N, 1))
+
+    # Posterior covariances of q_n(theta). These MUST persist across iterations:
+    # the emission correction at iteration `it` needs the V from the previous
+    # theta solve, which is the correct coordinate-ascent ordering (q(z) is
+    # updated given the current q(theta)). Initialised to the prior S, since
+    # before a trace's data is used q_n(theta) is just p(theta | m, S).
+    V = [S.copy() for _ in range(N)]
 
     sigma = sigma.copy()
     sigma0 = sigma.copy()
     pi = np.ones(Nstate) / Nstate
 
-    likelihood = []
+    free_energy = []
     transition_history = []
     isConverged = False
 
-    print("Fitting full hierarchical HMM with EM...")
+    print("Fitting hierarchical HMM with variational EM...")
 
     for it in range(max_iter):
         Sinv = np.linalg.inv(S)
@@ -1299,15 +1383,27 @@ def expectation_maximization_multi_trace_hb(
         trans_den = np.zeros(Nstate)
         cov_acc = np.zeros((3, 3, Nstate))
         cov_den = np.zeros(Nstate)
-        totalLogLik = 0.0
+        # F = sum_n log Ztilde^(n) - sum_n KL(q_n(theta) || N(m, S)), both
+        # evaluated at the q(theta) and (m, S) in force at the START of this
+        # iteration, so the recorded sequence is a consistent point in the
+        # coordinate-ascent cycle and is monotone non-decreasing.
+        logZ_total = 0.0
+        kl_total = 0.0
 
-        # ---- per-trace storage ----
-        V = [None] * N  # posterior covariances (coeff^(n)+S^-1)^-1
+        _, logdetS = np.linalg.slogdet(S)
 
         # ===================== per-trace E step + theta solve =====================
         for n, trace in enumerate(trajectory):
             u = _theta_to_states(stateindex, thetas[n], Lg, Lb, Lr)
             T = trace.shape[1]
+
+            # KL(N(theta^(n), V^(n)) || N(m, S)) for the free energy, using the
+            # q(theta) that the forward pass below is about to condition on.
+            dm = thetas[n] - m
+            _, logdetV = np.linalg.slogdet(V[n])
+            kl_total += 0.5 * (
+                np.trace(Sinv @ V[n]) + dm @ Sinv @ dm - L + logdetS - logdetV
+            )
 
             obs_dist = np.zeros((Nstate, T))
             alphas = np.zeros((Nstate, T))
@@ -1315,17 +1411,50 @@ def expectation_maximization_multi_trace_hb(
             gamma = np.zeros((Nstate, T))
             xi = np.zeros((Nstate, Nstate, T - 1))
 
-            obs_dist[:, 0] = gaussian_emission(u, sigma, trace[:, 0], 3)
+            # ---- effective emissions ----
+            # E_q(theta)[log N(y_t | M_i theta, Sigma_i)]
+            #   = log N(y_t | M_i theta^(n), Sigma_i) - 1/2 tr(Sigma_i^-1 M_i V M_i^T)
+            # The correction has no t dependence, so it is one scalar per state.
+            # It is state-DEPENDENT, so it survives the per-step renormalisation
+            # of the forward pass and genuinely reweights the responsibilities:
+            # states whose levels are poorly determined get down-weighted.
+            log_corr = (
+                np.array(
+                    [
+                        -0.5
+                        * np.trace(precision[:, :, i] @ M_all[i] @ V[n] @ M_all[i].T)
+                        for i in range(Nstate)
+                    ]
+                )
+                if apply_v_corrections
+                else np.zeros(Nstate)
+            )
+            # Factor out the max before exponentiating so a large V cannot
+            # underflow every state to zero. Pulling out exp(shift) once per
+            # frame scales Ztilde by exp(T * shift), added back below.
+            shift = log_corr.max()
+            emit_corr = np.exp(log_corr - shift)
+
+            obs_dist[:, 0] = gaussian_emission(u, sigma, trace[:, 0], 3) * emit_corr
             alphas[:, 0] = pi * obs_dist[:, 0]
-            alphas[:, 0] /= alphas[:, 0].sum()
+            asum = max(alphas[:, 0].sum(), eps)
+            logZ_n = np.log(asum)
+            alphas[:, 0] /= asum
 
             for t in range(T - 1):
-                obs_dist[:, t + 1] = gaussian_emission(u, sigma, trace[:, t + 1], 3)
+                obs_dist[:, t + 1] = (
+                    gaussian_emission(u, sigma, trace[:, t + 1], 3) * emit_corr
+                )
                 for j in range(Nstate):
                     alphas[j, t + 1] = (
                         alphas[:, t] @ transition_mat[:, j] * obs_dist[j, t + 1]
                     )
-                alphas[:, t + 1] /= alphas[:, t + 1].sum()
+                asum = max(alphas[:, t + 1].sum(), eps)
+                logZ_n += np.log(asum)  # log of the scaling constant c_{t+1}
+                alphas[:, t + 1] /= asum
+
+            # undo the max-shift factored out of every frame's emissions
+            logZ_total += logZ_n + T * shift
 
             betas[:, T - 1] = 1.0 / Nstate
             for t in range(T - 2, -1, -1):
@@ -1335,13 +1464,13 @@ def expectation_maximization_multi_trace_hb(
                     )
                 betas[:, t] /= betas[:, t].sum()
 
-            p_y = alphas[:, 0] @ betas[:, 0]
-            totalLogLik += np.log(p_y)
-
+            # gamma and xi are renormalised per timestep, so the old p_y divisor
+            # was a no-op here; the log-likelihood it used to feed is now
+            # logZ_n above, accumulated from the forward scaling constants.
             gamma[:, T - 1] = alphas[:, T - 1]
             for t in range(T - 2, -1, -1):
-                gamma[:, t] = alphas[:, t] * betas[:, t] / p_y
-                gamma[:, t] /= gamma[:, t].sum()
+                gamma[:, t] = alphas[:, t] * betas[:, t]
+                gamma[:, t] /= max(gamma[:, t].sum(), eps)
 
             for t in range(T - 1):
                 for i in range(Nstate):
@@ -1350,9 +1479,8 @@ def expectation_maximization_multi_trace_hb(
                         * obs_dist[:, t + 1]
                         * transition_mat[i, :]
                         * betas[:, t + 1]
-                        / p_y
                     )
-                xi[:, :, t] /= xi[:, :, t].sum()
+                xi[:, :, t] /= max(xi[:, :, t].sum(), eps)
 
             # ---- pooled stats (transition + covariance are shared) ----
             PI_acc += gamma[:, 0]
@@ -1363,37 +1491,45 @@ def expectation_maximization_multi_trace_hb(
             gammaSumT = np.sum(gamma, axis=1)  # (Nstate,)
             gammaSumY = trace @ gamma.T  # (3, Nstate)
 
-            # build coeff^(n), b^(n) from trace n ALONE (your block machinery)
+            # coeff^(n) = sum_i N_i M_i^T Sigma_i^-1 M_i,  b^(n) = sum_i M_i^T Sigma_i^-1 r_i
+            # Identical to the Mg/Mb/Mr block assembly -- the (r, c) block of
+            # M_all[i].T @ P @ M_all[i] is exactly Mr_i.T @ P @ Mc_i.
             a = np.zeros((L, L))
             b = np.zeros(L)
-            M = [Mg, Mb, Mr]
-            offs = np.cumsum([0, Lg, Lb, Lr])
             for i in range(Nstate):
-                P = precision[:, :, i]
-                for r in range(3):
-                    Mr_i = M[r][:, :, i]
-                    b[offs[r] : offs[r + 1]] += Mr_i.T @ P @ gammaSumY[:, i]
-                    for c in range(3):
-                        a[offs[r] : offs[r + 1], offs[c] : offs[c + 1]] += (
-                            Mr_i.T @ P @ M[c][:, :, i] * gammaSumT[i]
-                        )
+                MtP = M_all[i].T @ precision[:, :, i]  # (L, 3)
+                a += (MtP @ M_all[i]) * gammaSumT[i]
+                b += MtP @ gammaSumY[:, i]
 
             # ridge toward the population, then solve for this trace's levels
             coeff_n = a + Sinv
             thetas[n] = np.linalg.solve(coeff_n, b + Sinv @ m)
             V[n] = np.linalg.inv(coeff_n)
 
-            # covariance accumulator uses THIS trace's freshly-solved means
+            # Covariance accumulator, under the freshly-solved q_n(theta):
+            #   E_q[(y - M_i theta)(y - M_i theta)^T]
+            #     = (y - M_i thetabar)(y - M_i thetabar)^T + M_i V M_i^T
+            # Dropping the second term biases Sigma low, which inflates
+            # coeff^(n), which shrinks V, which shrinks S -- the same collapse
+            # the V term in the S update exists to prevent.
             u_new = _theta_to_states(stateindex, thetas[n], Lg, Lb, Lr)
             for i in range(Nstate):
                 diff = trace - u_new[:, i : i + 1]  # (3, T)
                 cov_acc[:, :, i] += (gamma[i, :] * diff) @ diff.T
+                if apply_v_corrections:
+                    cov_acc[:, :, i] += gammaSumT[i] * (M_all[i] @ V[n] @ M_all[i].T)
             cov_den += gammaSumT
 
-        likelihood.append(totalLogLik)
-        if it >= 1 and abs(likelihood[-1] - likelihood[-2]) < criterion:
+        # Free energy at a consistent point in the cycle: log Ztilde comes from
+        # the forward pass just run, and the KL uses the same q(theta) and
+        # (m, S) that pass conditioned on. This sequence must be monotone
+        # non-decreasing; it is the objective both the theta solve and the
+        # (m, S) update ascend. The old log(alpha . beta) was neither.
+        F = logZ_total - kl_total
+        free_energy.append(F)
+        if it >= 1 and abs(free_energy[-1] - free_energy[-2]) < criterion:
             isConverged = True
-            print(f"Converged in {it + 1} iterations.")
+            print(f"Converged in {it + 1} iterations (F = {F:.4f}).")
             break
 
         # ===================== M step: shared + hyperparameters =====================
@@ -1409,11 +1545,16 @@ def expectation_maximization_multi_trace_hb(
         # population mean:  m = average of the per-trace level vectors
         m = thetas.mean(axis=0)
 
-        # population covariance: scatter of thetas PLUS posterior covariances V^(n)
+        # Population covariance: scatter of the thetas PLUS the posterior
+        # covariances V^(n), since E_q[(theta-m)(theta-m)^T] = V + (thetabar-m)(...)^T.
+        # Without V this is the scatter of already-shrunk point estimates, whose
+        # only fixed point is S = 0 (derivation section 5.1).
         S = np.zeros((L, L))
         for n in range(N):
-            d = thetas[n] - m
-            S += np.outer(d, d) + V[n]
+            dtheta = thetas[n] - m
+            S += np.outer(dtheta, dtheta)
+            if apply_v_corrections:
+                S += V[n]
         S /= N
         S += 1e-6 * np.eye(L)  # keep strictly positive-definite
 
@@ -1437,7 +1578,7 @@ def expectation_maximization_multi_trace_hb(
         sigma,
         transition_mat,
         pi,
-        np.array(likelihood),
+        np.array(free_energy),
         transition_history,
     )
 
@@ -1509,6 +1650,15 @@ def viterbi_decode(trajectory, u, sigma2, transition_mat, pi):
     prob_matrix = np.zeros((timesteps, state_num))
     index_backtrack = np.zeros((timesteps, state_num))
 
+    # Forbidden transitions / unreachable start states have probability 0, and
+    # log(0) = -inf both spams a divide-by-zero warning and can propagate into
+    # nan in the normalization below. Take logs once, flooring at the smallest
+    # positive double so a 0-probability move becomes a large finite penalty
+    # (~ -708) that Viterbi will avoid unless nothing else is possible.
+    tiny = np.finfo(float).tiny
+    log_pi = np.log(np.clip(pi, tiny, None))
+    log_trans = np.log(np.clip(transition_mat, tiny, None))
+
     # this would probably need to be different for a EB Gaussian HMM
     for i in range(timesteps):
         for j in range(state_num):
@@ -1522,15 +1672,13 @@ def viterbi_decode(trajectory, u, sigma2, transition_mat, pi):
             )
 
             if i == 0:
-                prob_matrix[i, j] = np.log(pi[j]) + log_emit
+                prob_matrix[i, j] = log_pi[j] + log_emit
                 index_backtrack[i, j] = j
             else:
                 prob_max_tmp = -np.inf
                 prob_max_index = 0
                 for k in range(state_num):
-                    prob_tmp = (
-                        log_emit + prob_matrix[i - 1, k] + np.log(transition_mat[k, j])
-                    )
+                    prob_tmp = log_emit + prob_matrix[i - 1, k] + log_trans[k, j]
                     if prob_tmp > prob_max_tmp:
                         prob_max_tmp = prob_tmp
                         prob_max_index = k
@@ -1557,6 +1705,57 @@ def viterbi_decode(trajectory, u, sigma2, transition_mat, pi):
         prob_max,
         prob_sequence,
     )
+
+
+def viterbi_decode_hb(
+    trajectory: list,
+    stateindex,
+    thetas: np.ndarray,
+    sigma: np.ndarray,
+    transition_mat: np.ndarray,
+    pi: np.ndarray,
+):
+    """Viterbi-decode every trace of a hierarchical-Bayes fit using that trace's
+    OWN level vector, as returned by expectation_maximization_multi_trace_hb().
+
+    The hierarchy already produced a per-trace posterior mean over the levels
+    (thetas[n]); decoding uses it directly rather than drawing from the
+    population prior N(m, S). The emission covariance, transition matrix and
+    initial distribution are shared across traces, so they are passed straight
+    through to viterbi_decode().
+
+    trajectory : list of (d, T) arrays, same order as the fit's `trajectory`.
+
+    stateindex : (d, Nstate) 1-based level index matrix used for the fit.
+
+    thetas : (N, L) per-trace level vectors [ug; ub; ur] (the `thetas` return
+        value of the HB fit).
+
+    sigma : (d, d, Nstate) shared per-state covariance.
+
+    transition_mat : (Nstate, Nstate) shared transition matrix.
+
+    pi : (Nstate,) shared initial-state distribution.
+
+    Returns a list of (state_sequence, prob_max, prob_sequence) tuples, one per
+    trace, plus the list of per-trace mean matrices `u_n` (handy for plotting).
+    """
+    Mg, Mb, Mr = build_select_matrices(stateindex)
+    Lg, Lb, Lr = Mg.shape[1], Mb.shape[1], Mr.shape[1]
+
+    if len(thetas) != len(trajectory):
+        raise ValueError(
+            f"thetas has {len(thetas)} rows but there are {len(trajectory)} traces"
+        )
+
+    decodes = []
+    means = []
+    for n, trace in enumerate(trajectory):
+        u_n = _theta_to_states(stateindex, thetas[n], Lg, Lb, Lr)
+        means.append(u_n)
+        decodes.append(viterbi_decode(trace, u_n, sigma, transition_mat, pi))
+
+    return decodes, means
 
 
 def plot_viterbi_trace(
@@ -1818,7 +2017,14 @@ def main_old():
 
     u, sigma2, transition_mat, pi, likelihood, transition_history = (
         expectation_maximization_single_trace(
-            stateindex, ug0, ub0, ur0, transition_mat, sigma2, trajectory, solve="covariance"
+            stateindex,
+            ug0,
+            ub0,
+            ur0,
+            transition_mat,
+            sigma2,
+            trajectory,
+            solve="covariance",
         )
     )
 
@@ -1917,24 +2123,129 @@ def main_multi():
             transition_mat,
             sigma2,
             trajectories,
+            solve="covariance"
         )
     )
 
     np.savetxt(
-        "transition_matrix_results_multi.txt",
+        "transition_matrix_results_multi_covariance.txt",
         transition_mat,
         fmt="%0.4f",
     )
 
     # all per-iteration transition matrices, shape (n_iters, Nstate, Nstate)
     transition_history = np.array(transition_history)
-    np.save("transition_matrix_history_multi.npy", transition_history)
+    np.save("transition_matrix_history_multi_covariance.npy", transition_history)
 
-    with open("transition_matrix_history_multi.txt", "w") as f:
+    with open("transition_matrix_history_multi_covariance.txt", "w") as f:
         for it, mat in enumerate(transition_history):
             f.write(f"# iteration {it + 1}\n")
             np.savetxt(f, mat, fmt="%0.4f")
             f.write("\n")
+
+
+def main_multi_hb():
+    exp_condition = glob(
+        "/Users/jefferyzhou/Documents/johnson-lab/Jake_DNA_protein/GAFsmFRETdata/expData_3colorFRET/expCondition_461/group1/*"
+    )
+
+    trajectories = []
+
+    for trace in exp_condition:
+        trajectories.append(build_trajectory(trace))
+
+    # aggregate values across traces
+    pooled_trajectories = np.hstack(trajectories)
+
+    stateindex = np.array(
+        [
+            [
+                3,
+                1,
+                2,
+                2,
+                2,
+                1,
+            ],  ## each column is a state; numbers are 1-based level indices for intensity
+            [3, 3, 1, 2, 3, 3],
+            [3, 3, 3, 2, 1, 3],
+        ]
+    )
+
+    ug0, ub0, ur0, sigma_g, sigma_b, sigma_r = fit_gmm_levels(pooled_trajectories)
+
+    sigma2 = np.zeros((3, 3, stateindex.shape[1]))
+
+    for i in range(stateindex.shape[1]):
+        sigma2[0, 0, i] = sigma_g[stateindex[0, i] - 1] ** 2
+        sigma2[1, 1, i] = sigma_b[stateindex[1, i] - 1] ** 2
+        sigma2[2, 2, i] = sigma_r[stateindex[2, i] - 1] ** 2
+
+    transition_mat = np.array(
+        [
+            [0.9394, 0.0001, 0.0108, 0.0495, 0.0001, 0.0001],
+            [0.0472, 0.5279, 0.4121, 0.0128, 0, 0],
+            [0.0147, 0.0597, 0.5057, 0.1005, 0.3194, 0],
+            [0.0001, 0.0555, 0.3652, 0.2535, 0.3252, 0.0005],
+            [0.0001, 0, 0.2417, 0.1869, 0.5712, 0.0001],
+            [0.0001, 0, 0, 0.0001, 0.0001, 0.9997],
+        ]
+    )
+
+    m, S, thetas, sigma, transition_mat, pi, free_energy, transition_history = (
+        expectation_maximization_multi_trace_hb(
+            stateindex,
+            ug0,
+            ub0,
+            ur0,
+            transition_mat,
+            sigma2,
+            trajectories,
+        )
+    )
+
+    np.savetxt(
+        "transition_matrix_results_multi_hb.txt",
+        transition_mat,
+        fmt="%0.4f",
+    )
+
+    # all per-iteration transition matrices, shape (n_iters, Nstate, Nstate)
+    transition_history = np.array(transition_history)
+    np.save("transition_matrix_history_multi_hb.npy", transition_history)
+
+    with open("transition_matrix_history_multi_hb.txt", "w") as f:
+        for it, mat in enumerate(transition_history):
+            f.write(f"# iteration {it + 1}\n")
+            np.savetxt(f, mat, fmt="%0.4f")
+            f.write("\n")
+
+    # decode every trace with its own per-trace level vector (shared sigma,
+    # transition_mat, pi), then write one page per trace to a single PDF.
+    decodes, means = viterbi_decode_hb(
+        trajectories, stateindex, thetas, sigma, transition_mat, pi
+    )
+
+    with PdfPages("viterbi_trace_multi_hb.pdf") as pdf:
+        for n, trajectory in enumerate(trajectories):
+            state_sequence, prob_max, prob_sequence = decodes[n]
+            print(f"Trace {n} Viterbi state sequence: {state_sequence}")
+
+            fig, _ = plot_viterbi_trace(
+                trajectory,
+                means[n],
+                state_sequence,
+                title=f"Viterbi decoded trace {n} (hierarchical Bayes)",
+            )
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    print(f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_hb.pdf")
+
+
+# TODO
+def main_multi_normalized():
+    """todo"""
 
 
 if __name__ == "__main__":
@@ -1944,3 +2255,6 @@ if __name__ == "__main__":
         main_multi()
     elif sys.argv[1] == "single_old":
         main_old()
+    elif sys.argv[1] == "multi_hb":
+        main_multi_hb()
+    elif sys.argv[1] == "multi_normalized":
