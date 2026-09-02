@@ -27,25 +27,15 @@ STATE_COLORS = [
 ]
 
 
-class MultivariateGaussian:
-    def __init__(self, mean: np.ndarray, cov: np.ndarray, seed: int | None = None):
-        self.seed = seed
-        self.mean = mean
-        self.cov = cov
-        self.dim = mean.shape[0]
-        self.precision = np.linalg.inv(cov)
-        self.det_cov = np.linalg.det(cov)
-        self.generator = multivariate_normal(self.mean, self.cov, self.seed)
+def build_multistart(seed=42, states=6):
+    # pi is initialized as a uniform
+    # need to initialize the transition matrix
 
-    def draw(self, num_samples: int = 1) -> np.ndarray:
-        """Draw a sample from the multivariate Gaussian distribution."""
-        return self.generator.rvs(size=num_samples)
+    np.random.default_rng(seed)  # set the random seed for reproducibility
 
-    def update(self, mean: np.ndarray, cov: np.ndarray):
-        self.mean = mean
-        self.cov = cov
-        self.precision = np.linalg.inv(cov)
-        self.det_cov = np.linalg.det(cov)
+    # alpha = array of ones gives unbiased dirichlet distribution
+    transition_mat = np.random.dirichlet(alpha=np.ones(states), size=states)
+    return transition_mat
 
 
 def gaussian_emission(u, sigma, trajectory, d):
@@ -1395,7 +1385,7 @@ def main():
                 1,
             ],  ## each column is a state; numbers are 1-based level indices for intensity
             [3, 3, 1, 2, 3, 3],
-            [3, 3, 3, 2, 1, 3],
+            [3, 3, 3, 2, 1, 3], # 3 is the lowest level, 1 is the highest
         ]
     )
     # Gaussian-mixture starting condition: fit a 3-component GMM per channel to
@@ -1680,23 +1670,147 @@ def main_multi():
             f.write("\n")
 
     with PdfPages("viterbi_trace_multi_precision.pdf") as pdf:
-            for n, trajectory in enumerate(trajectories):
-                state_sequence, prob_max, prob_sequence = viterbi_decode(
-                    trajectory, u, sigma2, transition_mat, pi
-                )
-                print(f"Trace {n} Viterbi state sequence: {state_sequence}")
-    
-                fig, _ = plot_viterbi_trace(
-                    trajectory,
-                    u,
-                    state_sequence,
-                    title=f"Viterbi decoded trace {n} (normalized)",
-                )
-                pdf.savefig(fig, bbox_inches="tight")
-                plt.close(fig)
-    
+        for n, trajectory in enumerate(trajectories):
+            state_sequence, prob_max, prob_sequence = viterbi_decode(
+                trajectory, u, sigma2, transition_mat, pi
+            )
+            print(f"Trace {n} Viterbi state sequence: {state_sequence}")
+
+            fig, _ = plot_viterbi_trace(
+                trajectory,
+                u,
+                state_sequence,
+                title=f"Viterbi decoded trace {n} (normalized)",
+            )
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    print(f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_precision.pdf")
+
+
+def main_multi_multistart():
+    exp_condition = glob(
+        "/Users/jefferyzhou/Documents/johnson-lab/Jake_DNA_protein/GAFsmFRETdata/expData_3colorFRET/expCondition_461/group1/*"
+    )
+
+    trajectories = []
+
+    for trace in exp_condition:
+        trajectories.append(build_trajectory(trace))
+
+    # aggregate values across traces
+    pooled_trajectories = np.hstack(trajectories)
+
+    stateindex = np.array(
+        [
+            [
+                3,
+                1,
+                2,
+                2,
+                2,
+                1,
+            ],  ## each column is a state; numbers are 1-based level indices for intensity
+            [3, 3, 1, 2, 3, 3],
+            [3, 3, 3, 2, 1, 3],
+        ]
+    )
+
+    ug0, ub0, ur0, sigma_g, sigma_b, sigma_r = fit_gmm_levels(pooled_trajectories)
+
+    sigma2 = np.zeros((3, 3, stateindex.shape[1]))
+
+    for i in range(stateindex.shape[1]):
+        sigma2[0, 0, i] = sigma_g[stateindex[0, i] - 1] ** 2
+        sigma2[1, 1, i] = sigma_b[stateindex[1, i] - 1] ** 2
+        sigma2[2, 2, i] = sigma_r[stateindex[2, i] - 1] ** 2
+
+    num_restarts = 100
+
+    for i in range(num_restarts):  # run random restarts of EM with different transition_mats
+        ## thinking about whether we want to randomize means, sigmas, and covs are well
+        max_likelihood = -np.inf
+        max_likelihood_params = {}
+
+        transition_mat = build_multistart(stateindex.shape[0])
+
+        u, sigma2, transition_mat, pi, likelihood, transition_history = (
+            expectation_maximization_multi_trace(
+                stateindex,
+                ug0,
+                ub0,
+                ur0,
+                transition_mat,
+                sigma2,
+                trajectories,
+                solve="precision",
+            )
+        )
+
+        if likelihood[-1] > max_likelihood:
+            max_likelihood = likelihood[-1]
+            max_likelihood_params = {
+                "u": u,
+                "sigma2": sigma2,
+                "transition_mat": transition_mat,
+                "pi": pi,
+                "likelihood": likelihood,
+                "transition_history": transition_history,
+            }
+
+    with open("multi_hmm_fit_results_multistart.pkl", "wb") as f:
+        pickle.dump(
+            {
+                "u": max_likelihood_params["u"],
+                "sigma2": max_likelihood_params["sigma2"],
+                "transition_mat": max_likelihood_params["transition_mat"],
+                "pi": max_likelihood_params["pi"],
+                "likelihood": max_likelihood_params["likelihood"],
+                "transition_history": max_likelihood_params["transition_history"],
+            },
+            f,
+        )
+
+    np.savetxt(
+        "transition_matrix_results_multi_precision_multistart.txt",
+        transition_mat,
+        fmt="%0.4f",
+    )
+
+    # all per-iteration transition matrices, shape (n_iters, Nstate, Nstate)
+    transition_history: np.ndarray = np.array(transition_history)
+    np.save(
+        "transition_matrix_history_multi_precision_multistart.npy", transition_history
+    )
+
+    np.save("transition_matrix_multi_precision_multistart.npy", transition_mat)
+
+    np.save("initial_matrix_multi_precision_multistart.npy", pi)
+
+    with open("transition_matrix_history_multi_precision_multistart.txt", "w") as f:
+        for it, mat in enumerate(transition_history):
+            f.write(f"# iteration {it + 1}\n")
+            np.savetxt(f, mat, fmt="%0.4f")
+            f.write("\n")
+
+    with PdfPages("viterbi_trace_multi_precision_multistart.pdf") as pdf:
+        for n, trajectory in enumerate(trajectories):
+            state_sequence, prob_max, prob_sequence = viterbi_decode(
+                trajectory, u, sigma2, transition_mat, pi
+            )
+            print(f"Trace {n} Viterbi state sequence: {state_sequence}")
+
+            fig, _ = plot_viterbi_trace(
+                trajectory,
+                u,
+                state_sequence,
+                title=f"Viterbi decoded trace {n} (normalized)",
+            )
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
     print(
-        f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_precision.pdf"
+        f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_precision_multistart.pdf"
     )
 
 
@@ -1928,3 +2042,5 @@ if __name__ == "__main__":
         main_multi_hb()
     elif sys.argv[1] == "multi_normalized":
         main_multi_normalized()
+    elif sys.argv[1] == "multi_multistart":
+        main_multi_multistart()
