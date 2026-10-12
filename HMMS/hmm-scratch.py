@@ -228,7 +228,7 @@ def expectation_maximization_single_trace(
             if abs(likelihood[time - 1] - likelihood[time - 2]) < criterion:
                 isConverged = True  # we have converged; just break and return
                 print(f"EM algorithm converged in {100 - iter} iterations.")
-                return u, sigma, transition_mat, pi, likelihood, transition_history
+                return u, sigma, transition_mat, pi, likelihood, transition_history, trans_num
 
         # make updates (M step)
         pi = PI_acc / sum(PI_acc)  # update initial state probabilities
@@ -402,7 +402,9 @@ def expectation_maximization_single_trace(
     if not isConverged:
         print(f"EM algorithm did not converge within the maximum number of iterations.")
 
-    return u, sigma, transition_mat, pi, likelihood, transition_history
+    ## trans_num is the unnormalized transition matrix, which is useful for computing the expected number of transitions between states
+
+    return u, sigma, transition_mat, pi, likelihood, transition_history, trans_num
 
 
 ## extend to multiple sequences by accumulating the sufficient statistics
@@ -559,7 +561,7 @@ def expectation_maximization_multi_trace(
             if abs(likelihood[time - 1] - likelihood[time - 2]) < criterion:
                 isConverged = True  # we have converged; just break and return
                 print(f"EM algorithm converged in {1000 - iter} iterations.")
-                return u, sigma, transition_mat, pi, likelihood, transition_history
+                return u, sigma, transition_mat, pi, likelihood, transition_history, trans_num
 
         pi = PI_acc / sum(PI_acc)  # update initial state probabilities
 
@@ -721,7 +723,7 @@ def expectation_maximization_multi_trace(
     if not isConverged:
         print(f"EM algorithm did not converge within the maximum number of iterations.")
 
-    return u, sigma, transition_mat, pi, likelihood, transition_history
+    return u, sigma, transition_mat, pi, likelihood, transition_history, trans_num
 
 
 def _build_u_float(stateindex, ug, ub, ur):
@@ -1076,6 +1078,7 @@ def expectation_maximization_multi_trace_hb(
         pi,
         np.array(free_energy),
         transition_history,
+        trans_num,
     )
 
 
@@ -1385,7 +1388,7 @@ def main():
                 1,
             ],  ## each column is a state; numbers are 1-based level indices for intensity
             [3, 3, 1, 2, 3, 3],
-            [3, 3, 3, 2, 1, 3], # 3 is the lowest level, 1 is the highest
+            [3, 3, 3, 2, 1, 3],  # 3 is the lowest level, 1 is the highest
         ]
     )
     # Gaussian-mixture starting condition: fit a 3-component GMM per channel to
@@ -1623,7 +1626,7 @@ def main_multi():
         ]
     )
 
-    u, sigma2, transition_mat, pi, likelihood, transition_history = (
+    u, sigma2, transition_mat, pi, likelihood, transition_history, trans_num = (
         expectation_maximization_multi_trace(
             stateindex,
             ug0,
@@ -1645,6 +1648,7 @@ def main_multi():
                 "pi": pi,
                 "likelihood": likelihood,
                 "transition_history": transition_history,
+                "trans_num": trans_num,
             },
             f,
         )
@@ -1725,23 +1729,27 @@ def main_multi_multistart():
         sigma2[1, 1, i] = sigma_b[stateindex[1, i] - 1] ** 2
         sigma2[2, 2, i] = sigma_r[stateindex[2, i] - 1] ** 2
 
-    num_restarts = 100
+    initial_sigma2 = sigma2.copy()
 
-    for i in range(num_restarts):  # run random restarts of EM with different transition_mats
+    num_restarts = 100
+    max_likelihood = -np.inf
+    max_likelihood_params = {}
+
+    for i in range(
+        num_restarts
+    ):  # run random restarts of EM with different transition_mats
         ## thinking about whether we want to randomize means, sigmas, and covs are well
-        max_likelihood = -np.inf
-        max_likelihood_params = {}
 
         transition_mat = build_multistart(stateindex.shape[0])
 
-        u, sigma2, transition_mat, pi, likelihood, transition_history = (
+        u, sigma2, transition_mat, pi, likelihood, transition_history, trans_num = (
             expectation_maximization_multi_trace(
                 stateindex,
                 ug0,
                 ub0,
                 ur0,
                 transition_mat,
-                sigma2,
+                initial_sigma2,
                 trajectories,
                 solve="precision",
             )
@@ -1750,12 +1758,13 @@ def main_multi_multistart():
         if likelihood[-1] > max_likelihood:
             max_likelihood = likelihood[-1]
             max_likelihood_params = {
-                "u": u,
-                "sigma2": sigma2,
-                "transition_mat": transition_mat,
-                "pi": pi,
-                "likelihood": likelihood,
-                "transition_history": transition_history,
+                "u": max_likelihood_params.get("u", u),
+                "sigma2": max_likelihood_params.get("sigma2", sigma2),
+                "transition_mat": max_likelihood_params.get("transition_mat", transition_mat),
+                "pi": max_likelihood_params.get("pi", pi),
+                "likelihood": max_likelihood_params.get("likelihood", likelihood[-1]),
+                "transition_history": max_likelihood_params.get("transition_history", transition_history),
+                "trans_num": max_likelihood_params.get("trans_num", trans_num),
             }
 
     with open("multi_hmm_fit_results_multistart.pkl", "wb") as f:
@@ -1767,6 +1776,7 @@ def main_multi_multistart():
                 "pi": max_likelihood_params["pi"],
                 "likelihood": max_likelihood_params["likelihood"],
                 "transition_history": max_likelihood_params["transition_history"],
+                "trans_num": max_likelihood_params["trans_num"],
             },
             f,
         )
@@ -1862,7 +1872,7 @@ def main_multi_hb():
         ]
     )
 
-    m, S, thetas, sigma, transition_mat, pi, free_energy, transition_history = (
+    m, S, thetas, sigma, transition_mat, pi, free_energy, transition_history, trans_num = (
         expectation_maximization_multi_trace_hb(
             stateindex,
             ug0,
@@ -1873,21 +1883,6 @@ def main_multi_hb():
             trajectories,
         )
     )
-
-    with open("hb_hmm_fit_results.pkl", "wb") as f:
-        pickle.dump(
-            {
-                "m": m,
-                "S": S,
-                "thetas": thetas,
-                "sigma": sigma,
-                "transition_mat": transition_mat,
-                "pi": pi,
-                "free_energy": free_energy,
-                "transition_history": transition_history,
-            },
-            f,
-        )
 
     np.savetxt(
         "transition_matrix_results_multi_hb.txt",
@@ -1910,6 +1905,26 @@ def main_multi_hb():
     decodes, means = viterbi_decode_hb(
         trajectories, stateindex, thetas, sigma, transition_mat, pi
     )
+
+    with open("hb_hmm_fit_results.pkl", "wb") as f:
+        ## dump state assigments here as well
+        pickle.dump(
+            {
+                "m": m,
+                "S": S,
+                "thetas": thetas,
+                "sigma": sigma,
+                "transition_mat": transition_mat,
+                "pi": pi,
+                "free_energy": free_energy,
+                "trans_num": trans_num,
+                "transition_history": transition_history,
+                "decodes": decodes,
+                "population_mean": m,
+                "population_covariance": S,
+            },
+            f,
+        )
 
     with PdfPages("viterbi_trace_multi_hb.pdf") as pdf:
         for n, trajectory in enumerate(trajectories):
@@ -1981,7 +1996,7 @@ def main_multi_normalized():
         ]
     )
 
-    u, sigma2, transition_mat, pi, likelihood, transition_history = (
+    u, sigma2, transition_mat, pi, likelihood, transition_history, trans_num = (
         expectation_maximization_multi_trace(
             stateindex,
             ug0,
