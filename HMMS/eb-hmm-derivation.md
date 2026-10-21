@@ -248,6 +248,200 @@ $\bar\theta^{(n)}$), which is the one place where the implementation silently
 switches back to "$\theta$ is known exactly." It is the only real inconsistency
 between the two updates in the motivating question.
 
+### 4.1 What the correction is, and what it is not
+
+A natural but wrong reading of the box above: *the expectation threw off a stray
+trace term, and the "effective" emission is a repair that cancels it.* Nothing is
+cancelled here. The correction **is** the trace term, kept with its sign. Three
+statements make this precise.
+
+**(a) $\tilde p$ is a definition, not a repair.** The mean-field stationarity
+condition puts $\mathbb E_{q_n(\theta)}[\log \mathcal N(y_t\mid M_{z_t}\theta,\Sigma_{z_t})]$
+in the exponent — not the log-density evaluated at any particular $\theta$. So
+
+$$
+\log \tilde p_i^{(n)}(y_t) \;:=\; \mathbb E_{q_n(\theta)}\big[\log \mathcal N\big(y_t \mid M_i\theta,\ \Sigma_i\big)\big]
+\qquad\text{\emph{(definition)}}
+$$
+
+and the two-line computation above is just *evaluating* that definition for a
+Gaussian $q_n(\theta)$. The trace term is the value, not a residue. Read in this
+direction, the object needing justification is the *other* one: the plug-in
+emission $\mathcal N(y_t\mid M_i\bar\theta^{(n)},\Sigma_i)$ that the code uses is
+the approximation, and $\tilde p$ is exact given the §2 factorization. The word
+"correction" in this document means only "the amount by which the code's
+emission differs from the correct one," never "a term added to fix up an
+expectation."
+
+Note that $\tilde p_i^{(n)}$ is a nonnegative *weight function* of $y_t$, not a
+density: $\int \tilde p_i^{(n)}(y_t)\,dy_t = \exp\!\big(-\tfrac12\operatorname{tr}(\Sigma_i^{-1}M_iV^{(n)}M_i^\top)\big) < 1$
+whenever $M_iV^{(n)}\neq 0$. This is harmless — forward-backward never requires
+normalized emissions, and §7 already accounts for it by calling $\tilde Z^{(n)}$
+the log normalizer *of the $\tilde p$-HMM* rather than a marginal likelihood.
+
+**(b) The correction is a Jensen gap, hence always a penalty.** As a function of
+$\theta$,
+
+$$
+f_i(\theta) = \log \mathcal N\big(y_t\mid M_i\theta,\Sigma_i\big)
+= -\tfrac12\log\lvert 2\pi\Sigma_i\rvert - \tfrac12 (y_t - M_i\theta)^\top \Sigma_i^{-1}(y_t-M_i\theta)
+$$
+
+has Hessian $\nabla^2_\theta f_i = -M_i^\top \Sigma_i^{-1} M_i \preceq 0$, since
+$\Sigma_i \succ 0$ makes $\Sigma_i^{-1}\succ 0$ and hence
+$M_i^\top\Sigma_i^{-1}M_i \succeq 0$ for any $M_i$. So $f_i$ is concave on all of
+$\mathbb R^L$. **Jensen's inequality** for a concave function requires exactly
+that plus integrability of $\theta$ under $q_n$; the latter holds because
+$q_n(\theta)$ is Gaussian and so has all moments finite. Therefore
+
+$$
+\log\tilde p_i^{(n)}(y_t) = \mathbb E_{q_n}[f_i(\theta)] \;\le\; f_i\big(\mathbb E_{q_n}[\theta]\big) = \log \mathcal N\big(y_t\mid M_i\bar\theta^{(n)},\Sigma_i\big),
+$$
+
+with equality iff $M_i V^{(n)} = 0$, i.e. iff $q_n$ puts no variance in the
+directions state $i$ actually reads. Equivalently
+$\operatorname{tr}(\Sigma_i^{-1}M_iV^{(n)}M_i^\top) \ge 0$ — which needs no new
+argument, since §4 already identified that trace as
+$\mathbb E[\Delta^\top M_i^\top\Sigma_i^{-1}M_i\Delta]$, the expectation of a
+nonnegative quadratic form, vanishing iff $M_i\Delta = 0$ almost surely iff
+$M_iV^{(n)} = 0$. (Do *not* justify it as "the trace of a product of two PSD
+matrices" without further care: for PSD $A,B$ the product $AB$ is generally
+neither symmetric nor PSD. The claim $\operatorname{tr}(AB)\ge0$ is nonetheless
+true, via cyclicity of the trace: $\operatorname{tr}(AB) = \operatorname{tr}(A^{1/2}BA^{1/2})$,
+and $A^{1/2}BA^{1/2}$ *is* PSD. That regrouping is the actual content and must be
+stated.)
+
+So the correction can only ever *lower* an emission — it is a penalty for level
+uncertainty, never a boost, and dropping it makes every state look more confident
+than the model says it is.
+
+**(c) Contrast with marginalizing $\theta$ out of a single frame.** A different
+plausible-looking object is $\log \int \mathcal N(y_t\mid M_i\theta,\Sigma_i)\,q_n(\theta)\,d\theta
+= \log\mathcal N\big(y_t \mid M_i\bar\theta^{(n)},\, \Sigma_i + M_iV^{(n)}M_i^\top\big)$,
+which inflates the *covariance* instead of subtracting a scalar. It is not what
+belongs here: coordinate ascent on $\mathcal F$ requires $\mathbb E[\log p]$, and
+$\log \mathbb E[p]$ is not a step of any coordinate ascent on $\mathcal F$. The
+two are *both* Jensen gaps away from $\log\tilde p_i^{(n)}$ — not from each other
+and not from a common upper anchor — and they are gaps of two different concave
+functions, so they are not the same number: (b) is the gap of $f_i$ applied to
+$\theta$, while
+
+$$
+\underbrace{\mathbb E_{q_n}\big[\log p_i(y_t\mid\theta)\big]}_{\log\tilde p_i^{(n)}(y_t)} \;\le\; \log \mathbb E_{q_n}\big[p_i(y_t\mid\theta)\big] = \log \mathcal N\big(y_t\mid M_i\bar\theta^{(n)},\, \Sigma_i + M_iV^{(n)}M_i^\top\big)
+$$
+
+is the gap of $\log$ applied to $p_i$ — Jensen again, now for the concave
+function $\log$ on $(0,\infty)$, whose hypotheses hold since $p_i > 0$ and is
+$q_n$-integrable. The middle equality is the standard Gaussian marginalization
+$\int\mathcal N(y\mid M\theta,\Sigma)\,\mathcal N(\theta\mid\bar\theta,V)\,d\theta = \mathcal N(y\mid M\bar\theta,\ \Sigma + MVM^\top)$,
+valid because $y \mid \theta$ is linear-Gaussian in $\theta$ and $q_n$ is
+Gaussian. Note this argument holds for **every** $y_t$, unlike the determinant
+manipulation one might reach for instead.
+
+So the mean-field emission lies below both alternatives,
+
+$$
+\log\tilde p_i^{(n)}(y_t) \;\le\; \log\mathcal N\big(y_t\mid M_i\bar\theta^{(n)},\Sigma_i\big)
+\qquad\text{and}\qquad
+\log\tilde p_i^{(n)}(y_t) \;\le\; \log\mathcal N\big(y_t\mid M_i\bar\theta^{(n)},\Sigma_i + M_iV^{(n)}M_i^\top\big),
+$$
+
+but — and this is easy to get wrong — **the plug-in and the per-frame marginal
+are not ordered relative to each other.** Inflating the covariance costs a
+normalizer, $\tfrac12\log\lvert I + \Sigma_i^{-1}M_iV^{(n)}M_i^\top\rvert$, but
+buys a shrunken quadratic form,
+$\tfrac12\big[e_{it}^\top\Sigma_i^{-1}e_{it} - e_{it}^\top(\Sigma_i + M_iV^{(n)}M_i^\top)^{-1}e_{it}\big]$,
+and the second grows without bound as $e_{it}$ runs off in any direction not
+annihilated by $M_iV^{(n)}M_i^\top$, while the first is fixed. So for a large
+enough residual the marginal *exceeds* the plug-in. In the scalar case
+$\Sigma_i = M_iV^{(n)}M_i^\top = 1$ the two cross exactly at
+$\lvert e\rvert = \sqrt{2\ln 2} \approx 1.177$: setting
+$-\tfrac12\log 2\pi - \tfrac{e^2}{2} = -\tfrac12\log 4\pi - \tfrac{e^2}{4}$ gives
+$\tfrac12\log 2 = \tfrac{e^2}{4}$. That is barely over one standard deviation, so
+both orderings occur routinely in real data; the fraction of frames on either
+side depends entirely on the residual distribution and on the scale of
+$V^{(n)}$ relative to $\Sigma_i$, and is not a fixed number.
+
+The correct summary is therefore *not* "the code sits at the loosest end of a
+chain" but the weaker and true statement: the plug-in emission and the per-frame
+marginal are two incomparable quantities, both of which sit above the one the
+free energy actually requires.
+
+**Where a cancellation genuinely does occur — §7, not §4.** The intuition about
+trace terms cancelling is right, one level up. Collect the terms of
+$\mathcal F_n$ that involve $V^{(n)}$ *explicitly, at fixed $\bar\theta^{(n)}$ and
+fixed $q_n(z)$*. Holding those fixed is legitimate because
+$\big(q_n(z),\,\bar\theta^{(n)},\,V^{(n)}\big)$ are free variational parameters
+that may be varied independently, even though the §3 and §4 updates happen to
+couple them. Both conditions are needed: $\bar\theta^{(n)} = V^{(n)}(b^{(n)}+S^{-1}m)$
+depends on $V^{(n)}$, and so does $\gamma^{(n)}$ — through the very emission
+penalty of §4 — and $\Lambda^{(n)}$ depends on $\gamma^{(n)}$ in turn. From the
+emissions inside $\log\tilde Z^{(n)}$,
+
+$$
+-\tfrac12\sum_t\sum_i \gamma_{it}^{(n)}\operatorname{tr}\big(\Sigma_i^{-1}M_iV^{(n)}M_i^\top\big)
+= -\tfrac12\sum_i N_i^{(n)}\operatorname{tr}\big(M_i^\top\Sigma_i^{-1}M_i\,V^{(n)}\big)
+= -\tfrac12\operatorname{tr}\big(\Lambda^{(n)}V^{(n)}\big),
+$$
+
+using cyclicity of the trace and the definition of $\Lambda^{(n)}$ from §3.
+Expanding $-\mathrm{KL}$ from §7 gives
+$-\tfrac12\operatorname{tr}(S^{-1}V^{(n)}) - \tfrac12(\bar\theta^{(n)}-m)^\top S^{-1}(\bar\theta^{(n)}-m) + \tfrac L2 - \tfrac12\ln\det S + \tfrac12\ln\det V^{(n)}$,
+of which the $V^{(n)}$-dependent parts are $-\tfrac12\operatorname{tr}(S^{-1}V^{(n)})$
+and $+\tfrac12\log\det V^{(n)}$; the $+\tfrac L2$ is a constant, but must be
+carried along to see the cancellation land. Adding all three, and using
+$V^{(n)} = (\Lambda^{(n)}+S^{-1})^{-1}$ from §3:
+
+$$
+-\tfrac12\operatorname{tr}\big[(\Lambda^{(n)}+S^{-1})V^{(n)}\big] + \tfrac12\log\det V^{(n)} + \tfrac L2
+= -\tfrac12\operatorname{tr}(I_L) + \tfrac12\log\det V^{(n)} + \tfrac L2
+= \tfrac12\log\det V^{(n)}.
+$$
+
+So all the traces do collapse — to the constant $-L/2$, which the $+L/2$ in
+$-\mathrm{KL}$ absorbs — leaving the Occam factor $\tfrac12\log\det V^{(n)}$ as
+the *only explicit* $V^{(n)}$-dependence of $\mathcal F_n$. "Explicit" is the
+operative word: the remaining terms ($\sum_t\sum_i\gamma_{it}^{(n)}e_{it}^\top\Sigma_i^{-1}e_{it}$,
+$\mathbb H[q_n(z)]$, the dynamics) still move with $V^{(n)}$ through
+$\gamma^{(n)}$ and $\bar\theta^{(n)}$. Two caveats, both load-bearing:
+
+- This holds **only at the $\theta$-stationary point**, since it uses
+  $V^{(n)} = (\Lambda^{(n)}+S^{-1})^{-1}$. It is a statement about the *value* of
+  $\mathcal F$ right after the §3 update, not an identity valid mid-iteration.
+- It is emphatically **not** a licence to drop the §4 correction. The traces
+  cancelling in the value of $\mathcal F$ says nothing about the *updates*: the
+  emission penalty is state-dependent, so it changes $\gamma^{(n)}$, which changes
+  $\Lambda^{(n)}$, $\bar\theta^{(n)}$, $\Sigma_i$, and $S$. A tidy expression for
+  $\mathcal F$ at a stationary point does not make the path to that point optional.
+
+**Numerical confirmation** ($d=3$, $L=4$, random PSD $\Sigma$, $V$, and $M$;
+$4\times10^6$ Monte Carlo draws from $q_n(\theta)$). The expected quadratic form
+matches $e^\top\Sigma^{-1}e + \operatorname{tr}(\Sigma^{-1}MVM^\top)$ to a
+relative error of $1.1\times10^{-3}$, and $\mathbb E_q[\log\mathcal N]$ matches
+$\log\mathcal N(y\mid M\bar\theta,\Sigma) - \tfrac12\operatorname{tr}(\Sigma^{-1}MVM^\top)$
+to $3.2\times10^{-4}$ — both at Monte Carlo precision. Over $20{,}000$ random
+draws the mean-field emission never exceeded either the plug-in or the per-frame
+marginal ($0$ violations each), as (c) requires, while the marginal exceeded the
+plug-in in a large minority of them — confirming the absence of an ordering
+between those two. (That last fraction ranged from roughly a quarter to over half
+as the scale of $V$ relative to $\Sigma$ was varied, which is why the text above
+quotes the exact scalar crossover rather than a frequency.) The §7 collapse
+reproduces $\tfrac12\log\det V$ to $10^{-10}$, with
+$\operatorname{tr}[(\Lambda+S^{-1})V] = 4.000 = L$ exactly.
+
+**Magnitude.** In the same setup, with two states differing roughly tenfold in
+the scale of $V^{(n)}$ (the trace is linear in $V^{(n)}$, so this ratio carries
+straight through), the better-determined state carries
+$\tfrac12\operatorname{tr}(\Sigma_i^{-1}M_iVM_i^\top) = 0.12$ nats and the
+poorly-determined one $1.15$ nats — a relative tilt of about $1.0$ nat *per
+frame* between them. Since the penalty is applied once
+per frame at whichever state that frame occupies, two candidate paths through a
+$500$-frame trace that differ in which of these two states they occupy throughout
+differ by $\sim\!500$ nats in log-posterior on account of the correction alone.
+Realistic paths mix states and so see a smaller effect, but it scales with trace
+length and does not average out. The correction is one scalar per (state, trace)
+and costs nothing to compute, yet it is not a small effect.
+
 ---
 
 ## 5. M-step for the hyperparameters $(m, S)$
@@ -277,6 +471,13 @@ $$
 Both use only $\mathbb E_q[\theta]$ and $\mathbb E_q[\theta\theta^\top]$ under the
 *same* $q_n(\theta)$ derived in §3. There is no second likelihood function
 anywhere.
+
+*Why $\mathbb H[q]$ contributes nothing here, and why the derivative is taken
+in $S^{-1}$ rather than $S$, is worked out in
+[`mstep-entropy-and-precision-note.md`](mstep-entropy-and-precision-note.md).
+Why the expectation remains inside the trace in the first display — and why the
+same step in §4 shows no explicit $\mathbb E$ — is worked out in
+[`quadratic-form-expectation-note.md`](quadratic-form-expectation-note.md), §4.*
 
 ### 5.1 Why dropping $V^{(n)}$ collapses $S$ to zero — proof
 
@@ -381,6 +582,11 @@ $$
 $$
 \mathrm{KL} = \tfrac12\Big[\operatorname{tr}\big(S^{-1}V^{(n)}\big) + \big(\bar\theta^{(n)}-m\big)^\top S^{-1}\big(\bar\theta^{(n)}-m\big) - L + \ln\frac{\det S}{\det V^{(n)}}\Big].
 $$
+
+*How the joint functional $\mathcal F_n[q_n(z,\theta)]$ separates into these
+two single-factor pieces — entropy additivity plus term-by-term factorization
+of the expected log joint under the product measure — is worked out in
+[`free-energy-split-note.md`](free-energy-split-note.md).*
 
 Three consequences:
 
