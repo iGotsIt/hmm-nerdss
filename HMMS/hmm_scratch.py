@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.patches import Patch
 from scipy.stats import multivariate_normal
 from sklearn.mixture import GaussianMixture
 
@@ -30,25 +31,27 @@ STATE_COLORS = [
 
 
 def strip_leading_trailing_zero_states(
-    trace: np.ndarray, threshold: float = 100.0
+    trace: np.ndarray, threshold: float = 120.0
 ) -> np.ndarray:
     """
     0 -> 0 transitions do not reflect real kinetics. We don't really know what the
-    actual time is that the molecule spends in solution, so we either remove all 0 -> 0
+    actual time is that the molecule spends in solution, so we remove all 0 -> 0
     transitions from all trajectories, or we keep a constant number before and after
     each real trajectory. We need to figure out which ones are 0 -> 0 transitions.
 
-    Stripping all leading 0s is probably a better idea because it removes the bias of
-    the initial state distribution toward the 0 state, otherwise the initial state
-    is not informative. This way without leading 0s we can get a relative 3D binding rate between
+    Stripping all leading 0s also removes the bias of
+    the initial state distribution toward the 0 state so the initial state ratios
+    are informative. This way without leading 0s we can get a relative 3D binding rate between
     specific and non-specific sites.
 
     We want to keep transitions between real kinetics, so we just look in the beginning and end.
 
     Without first fitting to an HMM, we can use the donor channel (green) to determine when the
     molecule is in solution. If the donor channel is below an intensity threshold (100;
-    this is how the paper treats real data, where < 100 is the criterion for being on the dat),
+    this is how the paper treats real data),
     we treat it as in solution and thus a 0 state.
+
+    It should actually end on a 0 state, so we can see the other state --> 0 transitions.
 
     Parameters
     ----------
@@ -79,7 +82,7 @@ def strip_leading_trailing_zero_states(
         # find the last index where the donor channel is above the threshold
         last_index = np.flatnonzero(donor_channel > threshold)[-1]
 
-    return trace[:, first_index : last_index + 1]
+    return trace[:, first_index : last_index + 2]
 
 
 def build_multistart(rng: np.random.Generator, states=6):
@@ -133,7 +136,7 @@ def gaussian_emission(u, sigma, trajectory, d):
     ## pdf of a multivariate gaussian distribution
     n = u.shape[1]
     p = np.zeros(n)
-    for i in range(0, n):
+    for i in range(n):
         covm = sigma[:, :, i]
         detcovm = np.linalg.det(covm)
         convm_inv = np.linalg.inv(covm)
@@ -148,7 +151,7 @@ def gaussian_emission(u, sigma, trajectory, d):
 def build_states(stateindex, ug, ub, ur):
     u = stateindex * 0.0
     print(f"Building states u from stateindex: {stateindex}")
-    for i in range(0, stateindex.shape[1]):
+    for i in range(stateindex.shape[1]):
         u[0, i] = ug[stateindex[0, i] - 1]
         u[1, i] = ub[stateindex[1, i] - 1]
         u[2, i] = ur[stateindex[2, i] - 1]
@@ -164,26 +167,25 @@ def build_select_matrices(stateindex):
 
     # green
     Mg = np.zeros((d, max(stateindex[0, :]), state_num))
-    for i in range(0, state_num):
+    for i in range(state_num):
         index = stateindex[0, i] - 1
         Mg[0, index, i] = 1
 
     # blue
     Mb = np.zeros((d, max(stateindex[1, :]), state_num))
-    for i in range(0, state_num):
+    for i in range(state_num):
         index = stateindex[1, i] - 1
         Mb[1, index, i] = 1
 
     # red
     Mr = np.zeros((d, max(stateindex[2, :]), state_num))
-    for i in range(0, state_num):
+    for i in range(state_num):
         index = stateindex[2, i] - 1
         Mr[2, index, i] = 1
 
     return Mg, Mb, Mr
 
 
-## extend to multiple sequences by accumulating the sufficient statistics
 def expectation_maximization_single_trace(
     stateindex,
     ug: np.ndarray,
@@ -1457,6 +1459,7 @@ def plot_viterbi_trace(
     if Nstate > len(colors):
         extra = plt.get_cmap("tab20")(np.linspace(0, 1, Nstate - len(colors)))
         colors = colors + [tuple(c) for c in extra]
+
     cmap = ListedColormap(colors[:Nstate])
     norm = BoundaryNorm(np.arange(-0.5, Nstate + 0.5, 1.0), cmap.N)
 
@@ -1471,6 +1474,21 @@ def plot_viterbi_trace(
     ax_bar.set_yticks([])
     ax_bar.set_xlabel("time (s)")
     ax_bar.set_ylabel("state", rotation=0, ha="right", va="center")
+
+    # color -> state key to the right of the bar, at most 3 rows tall
+    key_handles = [Patch(color=colors[k], label=str(k)) for k in range(Nstate)]
+    ax_bar.legend(
+        handles=key_handles,
+        title="state",
+        loc="center left",
+        bbox_to_anchor=(1.005, 0.5),
+        ncol=int(np.ceil(Nstate / 3)),
+        fontsize=7,
+        title_fontsize=7,
+        frameon=False,
+        handlelength=1.0,
+        columnspacing=0.8,
+    )
 
     if save_path is not None:
         fig.savefig(save_path, bbox_inches="tight", dpi=150)
@@ -1779,7 +1797,9 @@ def main_multi(strip_zeros=False):
 
     # all per-iteration transition matrices, shape (n_iters, Nstate, Nstate)
     transition_history: np.ndarray = np.array(transition_history)
-    np.save("transition_matrix_history_multi_precision_strip_zeros.npy", transition_history)
+    np.save(
+        "transition_matrix_history_multi_precision_strip_zeros.npy", transition_history
+    )
 
     np.save("transition_matrix_multi_precision_strip_zeros.npy", transition_mat)
 
@@ -1807,7 +1827,9 @@ def main_multi(strip_zeros=False):
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 
-    print(f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_precision_strip_zeros.pdf")
+    print(
+        f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_precision_strip_zeros.pdf"
+    )
 
 
 def main_multi_multistart(strip_zeros=False):
@@ -1960,7 +1982,7 @@ def main_multi_multistart(strip_zeros=False):
 
 def main_multi_hb(strip_zeros=False):
     exp_condition = glob(
-        "/home/jhu/jzhou59/scratch_mjohn218/jeffery/fret_data/expData_3colorFRET/expCondition_461/group1/*"
+        "/home/jzhou59/data_mjohn218/jzhou59/fret_data/expData_3colorFRET/expCondition_461/*/*"
     )
 
     trajectories = []
@@ -2352,6 +2374,159 @@ def main_multi_hb_normalized_multistart(
     )
 
 
+def main_multi_hb_multistart(
+    num_restarts: int = 100,
+    seed: int = 42,
+    n_workers: int | None = None,
+    strip_zeros: bool = False,
+):
+    """Per-trace normalization -> hierarchical (empirical-Bayes) HMM, with
+    random restarts over the initial transition matrix. The restart with the
+    highest final free energy is kept."""
+    exp_condition = glob(
+        "/home/jzhou59/data_mjohn218/jzhou59/fret_data/expData_3colorFRET/expCondition_461/group1/*"
+    )
+
+    trajectories = []
+
+    for trace in exp_condition:
+        traj = build_trajectory(trace)
+        if strip_zeros:
+            traj = strip_leading_trailing_zero_states(traj)
+        trajectories.append(traj)
+
+    pooled_trajectories = np.hstack(trajectories)
+
+    stateindex = np.array(
+        [
+            [
+                3,
+                1,
+                2,
+                2,
+                2,
+                1,
+            ],  ## each column is a state; numbers are 1-based level indices for intensity
+            [3, 3, 1, 2, 3, 3],
+            [3, 3, 3, 2, 1, 3],
+        ]
+    )
+    Nstate = stateindex.shape[1]
+
+    # initial levels / spreads on the normalized [0, 1] scale (same as
+    # main_multi_normalized)
+    ug0, ub0, ur0, sigma_g, sigma_b, sigma_r = fit_gmm_levels(pooled_trajectories)
+
+    sigma2 = np.zeros((3, 3, Nstate))
+
+    for i in range(Nstate):
+        sigma2[0, 0, i] = sigma_g[stateindex[0, i] - 1] ** 2
+        sigma2[1, 1, i] = sigma_b[stateindex[1, i] - 1] ** 2
+        sigma2[2, 2, i] = sigma_r[stateindex[2, i] - 1] ** 2
+
+    rng = np.random.default_rng(seed)
+
+    # same scheme as main_multi_multistart: draw all starts up front, run them
+    # in a process pool, keep the one with the highest final free energy.
+    # Every restart starts from the same emission init; only the transition
+    # matrix varies.
+    transition_mats0 = [build_multistart(rng, Nstate) for _ in range(num_restarts)]
+
+    em_fn = partial(
+        expectation_maximization_multi_trace_hb,
+        stateindex,
+        ug0,
+        ub0,
+        ur0,
+        trajectory=trajectories,
+    )
+    results = run_multistart(em_fn, sigma2, transition_mats0, n_workers=n_workers)
+
+    # each result is (m, S, thetas, sigma, transition_mat, pi, free_energy,
+    # transition_history, trans_num)
+    restart_free_energies = np.array([res[6][-1] for res in results])
+    best = int(np.argmax(restart_free_energies))
+    best_free_energy = restart_free_energies[best]
+
+    (
+        m,
+        S,
+        thetas,
+        sigma,
+        transition_mat,
+        pi,
+        free_energy,
+        transition_history,
+        trans_num,
+    ) = results[best]
+    best_params = {
+        "restart": best,
+        "transition_mat0": transition_mats0[best],
+        "m": m,
+        "S": S,
+        "thetas": thetas,
+        "sigma": sigma,
+        "transition_mat": transition_mat,
+        "pi": pi,
+        "free_energy": free_energy,
+        "transition_history": transition_history,
+        "trans_num": trans_num,
+    }
+
+    print(
+        f"Best restart: {best_params['restart']} (free energy {best_free_energy:.4f})"
+    )
+
+    with open("hb_hmm_fit_results_multistart.pkl", "wb") as f:
+        pickle.dump(
+            {**best_params, "restart_free_energies": np.array(restart_free_energies)},
+            f,
+        )
+
+    thetas = best_params["thetas"]
+    sigma = best_params["sigma"]
+    transition_mat = best_params["transition_mat"]
+    pi = best_params["pi"]
+
+    np.savetxt(
+        "transition_matrix_results_multi_hb_multistart.txt",
+        transition_mat,
+        fmt="%0.4f",
+    )
+
+    # all per-iteration transition matrices, shape (n_iters, Nstate, Nstate)
+    transition_history = np.array(best_params["transition_history"])
+    np.save("transition_matrix_history_multi_hb_multistart.npy", transition_history)
+
+    with open("transition_matrix_history_multi_hb_multistart.txt", "w") as f:
+        for it, mat in enumerate(transition_history):
+            f.write(f"# iteration {it + 1}\n")
+            np.savetxt(f, mat, fmt="%0.4f")
+            f.write("\n")
+
+    decodes, means = viterbi_decode_hb(
+        trajectories, stateindex, thetas, sigma, transition_mat, pi
+    )
+
+    with PdfPages("viterbi_trace_multi_hb_multistart.pdf") as pdf:
+        for n, trajectory in enumerate(trajectories):
+            state_sequence, prob_max, prob_sequence = decodes[n]
+            print(f"Trace {n} Viterbi state sequence: {state_sequence}")
+
+            fig, _ = plot_viterbi_trace(
+                trajectory,
+                means[n],
+                state_sequence,
+                title=f"Viterbi decoded trace {n} (normalized, hierarchical Bayes)",
+            )
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    print(
+        f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_hb_multistart.pdf"
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run HMM fitting on single or multiple traces."
@@ -2366,6 +2541,7 @@ if __name__ == "__main__":
             "multi_hb",
             "multi_normalized",
             "multi_multistart",
+            "multi_hb_multistart",
             "multi_hb_normalized_multistart",
         ],
         help="Mode of operation: single trace, multiple traces, or hierarchical Bayes.",
@@ -2392,5 +2568,7 @@ if __name__ == "__main__":
         main_multi_normalized(strip_zeros=strip_zeros)
     elif args.mode == "multi_multistart":
         main_multi_multistart(strip_zeros=strip_zeros)
+    elif args.mode == "multi_hb_multistart":
+        main_multi_hb_multistart(strip_zeros=strip_zeros)
     elif args.mode == "multi_hb_normalized_multistart":
         main_multi_hb_normalized_multistart(strip_zeros=strip_zeros)
