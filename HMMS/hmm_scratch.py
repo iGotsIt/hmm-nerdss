@@ -1,8 +1,6 @@
 import argparse
 import os
 import pickle
-import sys
-from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from glob import glob
@@ -647,7 +645,7 @@ def expectation_maximization_multi_trace(
             gammaSumT = gammaSumT + np.sum(gamma, axis=1)
             gammaSumY = gammaSumY + trace @ gamma.T
 
-            for i in range(0, Nstate):
+            for i in range(Nstate):
                 for t in range(0, T):
                     diff = trace[:, t] - u_old[:, i]
                     cov_acc[:, :, i] = cov_acc[:, :, i] + gamma[i, t] * np.outer(
@@ -673,7 +671,7 @@ def expectation_maximization_multi_trace(
 
         pi = PI_acc / sum(PI_acc)  # update initial state probabilities
 
-        for i in range(0, Nstate):
+        for i in range(Nstate):
             # if state i is (near-)unoccupied, trans_den[i] -> 0 and the row
             # becomes 0/0 = NaN, which poisons the next forward pass. Keep the
             # previous row for dead states instead.
@@ -681,7 +679,7 @@ def expectation_maximization_multi_trace(
                 trans_den[i] < eps
             ):  ## guard against division by zero for unoccupied states (not in original code)
                 continue
-            for j in range(0, Nstate):
+            for j in range(Nstate):
                 transition_mat[i, j] = trans_num[i, j] / trans_den[i]
 
             transition_mat[i, :] = transition_mat[i, :] / sum(transition_mat[i, :])
@@ -690,7 +688,7 @@ def expectation_maximization_multi_trace(
         transition_history.append(transition_mat.copy())
 
         precision = np.zeros((sigma.shape[0], sigma.shape[1], sigma.shape[2]))
-        for i in range(0, Nstate):
+        for i in range(Nstate):
             precision[:, :, i] = np.linalg.inv(
                 sigma[:, :, i]
             )  # precision is the inverse of the covariance matrix
@@ -709,7 +707,7 @@ def expectation_maximization_multi_trace(
             a32 = np.zeros((Mr.shape[1], Mb.shape[1]))
             a33 = np.zeros((Mr.shape[1], Mr.shape[1]))
 
-            for i in range(0, Nstate):
+            for i in range(Nstate):
                 a11 = (
                     a11
                     + Mg[:, :, i].T @ precision[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
@@ -751,7 +749,7 @@ def expectation_maximization_multi_trace(
             c2 = np.zeros(Mb.shape[1])
             c3 = np.zeros(Mr.shape[1])
 
-            for i in range(0, Nstate):
+            for i in range(Nstate):
                 c1 = c1 + Mg[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
                 c2 = c2 + Mb[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
                 c3 = c3 + Mr[:, :, i].T @ precision[:, :, i] @ gammaSumY[:, i]
@@ -772,7 +770,7 @@ def expectation_maximization_multi_trace(
             a32 = np.zeros((Mr.shape[1], Mb.shape[1]))
             a33 = np.zeros((Mr.shape[1], Mr.shape[1]))
 
-            for i in range(0, Nstate):
+            for i in range(Nstate):
                 a11 = a11 + Mg[:, :, i].T @ sigma[:, :, i] @ Mg[:, :, i] * gammaSumT[i]
                 a12 = a12 + Mg[:, :, i].T @ sigma[:, :, i] @ Mb[:, :, i] * gammaSumT[i]
                 a13 = a13 + Mg[:, :, i].T @ sigma[:, :, i] @ Mr[:, :, i] * gammaSumT[i]
@@ -787,7 +785,7 @@ def expectation_maximization_multi_trace(
             c2 = np.zeros(Mb.shape[1])
             c3 = np.zeros(Mr.shape[1])
 
-            for i in range(0, Nstate):
+            for i in range(Nstate):
                 c1 = c1 + Mg[:, :, i].T @ sigma[:, :, i] @ gammaSumY[:, i]
                 c2 = c2 + Mb[:, :, i].T @ sigma[:, :, i] @ gammaSumY[:, i]
                 c3 = c3 + Mr[:, :, i].T @ sigma[:, :, i] @ gammaSumY[:, i]
@@ -2052,16 +2050,16 @@ def main_multi_hb(strip_zeros=False):
     )
 
     np.savetxt(
-        "transition_matrix_results_multi_hb.txt",
+        f"transition_matrix_results_multi_hb_strip_zeros_{strip_zeros}.txt",
         transition_mat,
         fmt="%0.4f",
     )
 
     # all per-iteration transition matrices, shape (n_iters, Nstate, Nstate)
     transition_history = np.array(transition_history)
-    np.save("transition_matrix_history_multi_hb.npy", transition_history)
+    np.save(f"transition_matrix_history_multi_hb_strip_zeros_{strip_zeros}.npy", transition_history)
 
-    with open("transition_matrix_history_multi_hb.txt", "w") as f:
+    with open(f"transition_matrix_history_multi_hb_strip_zeros_{strip_zeros}.txt", "w") as f:
         for it, mat in enumerate(transition_history):
             f.write(f"# iteration {it + 1}\n")
             np.savetxt(f, mat, fmt="%0.4f")
@@ -2073,7 +2071,7 @@ def main_multi_hb(strip_zeros=False):
         trajectories, stateindex, thetas, sigma, transition_mat, pi
     )
 
-    with open("hb_hmm_fit_results.pkl", "wb") as f:
+    with open(f"hb_hmm_fit_results_strip_zeros_{strip_zeros}.pkl", "wb") as f:
         ## dump state assigments here as well
         pickle.dump(
             {
@@ -2093,7 +2091,7 @@ def main_multi_hb(strip_zeros=False):
             f,
         )
 
-    with PdfPages("viterbi_trace_multi_hb.pdf") as pdf:
+    with PdfPages(f"viterbi_trace_multi_hb_strip_zeros_{strip_zeros}.pdf") as pdf:
         for n, trajectory in enumerate(trajectories):
             state_sequence, prob_max, prob_sequence = decodes[n]
             print(f"Trace {n} Viterbi state sequence: {state_sequence}")
@@ -2107,7 +2105,7 @@ def main_multi_hb(strip_zeros=False):
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 
-    print(f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_hb.pdf")
+    print(f"Saved {len(trajectories)} trace pages to viterbi_trace_multi_hb_strip_zeros_{strip_zeros}.pdf")
 
 
 # TODO -- normalize data, update covars and means
